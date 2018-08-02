@@ -8,6 +8,8 @@ CNN model for Q&A(Question and Answering), tensorflow code implementation
 计算输入问句与标准问句之间的相似度
 支持两种负采样方式
 支持多种embedding方式
+
+
 ================dataset================
 
 实验用的是清华大学的新闻分类数据集，实验效果来看
