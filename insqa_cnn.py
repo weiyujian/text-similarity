@@ -9,14 +9,25 @@ class InsQACNN(object):
 	def __init__(
 	  self, sequence_length, batch_size,
 	  vocab_size, embedding_size,
-	  filter_sizes, num_filters, l2_reg_lambda=0.0):
+	  filter_sizes, num_filters, l2_reg_lambda=0.0, embedding_type="subword_embedding"):
 
 		#用户问题,字向量使用embedding_lookup
-		self.input_x_1 = tf.placeholder(tf.int32, [None, sequence_length], name="input_x_1")
-		#待匹配正向问题
-		self.input_x_2 = tf.placeholder(tf.int32, [None, sequence_length], name="input_x_2")
-		#负向问题
-		self.input_x_3 = tf.placeholder(tf.int32, [None, sequence_length], name="input_x_3")
+		if embedding_type == "subword_embedding":
+			self.input_x_1 = tf.placeholder(tf.int32, name="input_x_1")
+			self.input_x_2 = tf.placeholder(tf.int32, name="input_x_2")
+			self.input_x_3 = tf.placeholder(tf.int32, name="input_x_3")
+			self.indices_x_1 = tf.placeholder(tf.int64, name="indices_x_1")
+			self.indices_x_2 = tf.placeholder(tf.int64, name="indices_x_2")
+			self.indices_x_3 = tf.placeholder(tf.int64, name="indices_x_3")
+			self.subword_shape_1 = tf.placeholder(tf.int64, name="subword_shape_1")
+			self.subword_shape_2 = tf.placeholder(tf.int64, name="subword_shape_2")
+			self.subword_shape_3 = tf.placeholder(tf.int64, name="subword_shape_3")
+		else:
+			self.input_x_1 = tf.placeholder(tf.int32, [None, sequence_length], name="input_x_1")
+			#待匹配正向问题
+			self.input_x_2 = tf.placeholder(tf.int32, [None, sequence_length], name="input_x_2")
+			#负向问题
+			self.input_x_3 = tf.placeholder(tf.int32, [None, sequence_length], name="input_x_3")
 		self.dropout_keep_prob = tf.placeholder(tf.float32, name="dropout_keep_prob")
 		l2_loss = tf.constant(0.0)
 		print("input_x_1 ", self.input_x_1)
@@ -26,18 +37,20 @@ class InsQACNN(object):
 			W = tf.Variable(
 				tf.random_uniform([vocab_size, embedding_size], -1.0, 1.0),
 				name="W")
-			chars_1 = tf.nn.embedding_lookup(W, self.input_x_1)
-			chars_2 = tf.nn.embedding_lookup(W, self.input_x_2)
-			chars_3 = tf.nn.embedding_lookup(W, self.input_x_3)
-			#self.embedded_chars_1 = tf.nn.dropout(chars_1, self.dropout_keep_prob)
-			#self.embedded_chars_2 = tf.nn.dropout(chars_2, self.dropout_keep_prob)
-			#self.embedded_chars_3 = tf.nn.dropout(chars_3, self.dropout_keep_prob)
-			self.embedded_chars_1 = chars_1
-			self.embedded_chars_2 = chars_2
-			self.embedded_chars_3 = chars_3
-		self.embedded_chars_expanded_1 = tf.expand_dims(self.embedded_chars_1, -1)
-		self.embedded_chars_expanded_2 = tf.expand_dims(self.embedded_chars_2, -1)
-		self.embedded_chars_expanded_3 = tf.expand_dims(self.embedded_chars_3, -1)
+			if embedding_type == "subword_embedding":
+				ids_x_1 = tf.SparseTensor(self.indices_x_1, self.input_x_1, self.subword_shape_1)
+				subword_x_1 = tf.nn.embedding_lookup_sparse(W, ids_x_1, None, combiner="mean")
+				self.embedded_chars_expanded_1 = tf.expand_dims(tf.reshape(subword_x_1,[-1,sequence_length, embedding_size]), -1)
+				ids_x_2 = tf.SparseTensor(self.indices_x_2, self.input_x_2, self.subword_shape_2)
+				subword_x_2 = tf.nn.embedding_lookup_sparse(W, ids_x_2, None, combiner="mean")
+				self.embedded_chars_expanded_2 = tf.expand_dims(tf.reshape(subword_x_2,[-1,sequence_length, embedding_size]), -1)
+				ids_x_3 = tf.SparseTensor(self.indices_x_3, self.input_x_3, self.subword_shape_3)
+				subword_x_3 = tf.nn.embedding_lookup_sparse(W, ids_x_3, None, combiner="mean")
+				self.embedded_chars_expanded_3 = tf.expand_dims(tf.reshape(subword_x_3,[-1,sequence_length, embedding_size]), -1)
+			else:
+				self.embedded_chars_expanded_1 = tf.expand_dims(tf.nn.embedding_lookup(W, self.input_x_1), -1)
+				self.embedded_chars_expanded_2 = tf.expand_dims(tf.nn.embedding_lookup(W, self.input_x_2), -1)
+				self.embedded_chars_expanded_3 = tf.expand_dims(tf.nn.embedding_lookup(W, self.input_x_2), -1)
 
 		pooled_outputs_1 = []
 		pooled_outputs_2 = []

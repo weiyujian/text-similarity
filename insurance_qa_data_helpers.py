@@ -64,7 +64,7 @@ def build_vocab_char(file_name):
 						code += 1
 	return vocab
 
-def build_vocab_subword(file_name):
+def build_vocab_subword(file_name, max_wordlen=6):
 	#构建基于subword的vocab
 	#标签分词\t问句分词
 	code = int(0)
@@ -80,11 +80,13 @@ def build_vocab_subword(file_name):
 			words = tmp_list[i].split(' ')
 			for word in words:
 				if not word in vocab:
-					subword_set = get_subword(word)
+					vocab[word] = code
+					code += 1
+					subword_set = get_subword(word, max_wordlen)
 					for subword in subword_set:
 						if subword in vocab or subword == "":continue
 						vocab[subword] = code
-					code += 1
+						code += 1
 	return vocab
 
 def get_subword(word, max_wordlen=6):
@@ -114,7 +116,7 @@ def read_alist(file_name, word_vocab, max_seq_len, embedding_type):
 		if items[0] in check_set:continue
 		check_set.add(items[0])
 		alist.append(items[0])
-		avec_list.append(encode_sent(word_vocab,items[0], max_seq_len, embedding_type))
+		avec_list.append(encode_sent(word_vocab,items[0], max_seq_len, 0, embedding_type))
 	print('read_alist done ......')
 	return alist,avec_list
 
@@ -147,15 +149,17 @@ def read_raw(file_name):
 	return raw, label_map
 
 
-def encode_sent(vocab, string, size, embedding_type="word_embedding"):
+def encode_sent(vocab, string, size, indic_start=0, embedding_type="word_embedding", max_wordlen=6):
 	words = string.split(' ')
 	if embedding_type == "char_embedding":
 		x = char_based_encode(vocab, words, size)
+		return x, None
 	elif embedding_type == "subword_embedding":
-		x = char_based_encode(vocab, words, size)
+		x, indics = subword_based_encode(vocab, words, size, indic_start, max_wordlen)
+		return x, indics
 	else:
 		x = word_based_encode(vocab, words, size)
-	return x
+		return x, None
 
 def word_based_encode(vocab, word_list, size):
 	#基于词的encode
@@ -183,40 +187,110 @@ def char_based_encode(vocab, word_list, size):
 			x.append(vocab[UNKNOWN_WORD])
 	return x
 
+def subword_based_encode(vocab, word_list, size, indic_start=0, max_wordlen=6):
+	#基于subword的encode
+	#indic_start:每个batch的indic_start都是从0开始
+	#return：x 词id 1,2,3, indices：词坐标 (0,0),(1,0),(2,0),(2,1),(2,2)
+	x = []
+	indics = []
+	for i in range(0, size):
+		if i >= len(word_list):
+			x.append(vocab[PAD_WORD])
+			indics.append((i+indic_start,0))
+		else:
+			indic_start_y = 0
+			if word_list[i] in vocab:
+				x.append(vocab[word_list[i]])
+				indics.append((i+indic_start,indic_start_y))
+				indic_start_y += 1
+			#add subword
+			uni_word = (BOW+word_list[i]+EOW).decode("utf-8")
+			for inx in xrange(len(uni_word)-1):
+				if indic_start_y >= max_wordlen:break
+				char = CHAR_GRAM_TOKEN + uni_word[inx:inx+2].encode("utf-8")
+				if char in vocab:
+					x.append(vocab[char])
+				else:
+					x.append(vocab[UNKNOWN_WORD])
+				indics.append((i+indic_start,indic_start_y))
+				indic_start_y += 1
+	return x,indics
+
+def change_indic_start(old_indic_start,new_indic_start,data_list):
+	new_list = []
+	for item in data_list:
+		new_list.append((item[0]-old_indic_start+new_indic_start,item[1]))
+	return new_list
+
 def rand_sample(vocab, alist, raw, batch_size, max_seq_len, embedding_type="word_embedding"):
 	x_train_1 = []
 	x_train_2 = []
 	x_train_3 = []
+	indices_train_1 = []
+	indices_train_2 = []
+	indices_train_3 = []
 	for i in range(0, batch_size):
 		items = raw[random.randint(0, len(raw) - 1)]
 		nega = rand_qa(alist, items[0])
-		x_train_1.append(encode_sent(vocab, items[1], max_seq_len, embedding_type))
-		x_train_2.append(encode_sent(vocab, items[0], max_seq_len, embedding_type))
-		x_train_3.append(encode_sent(vocab, nega, max_seq_len, embedding_type))
-	return np.array(x_train_1), np.array(x_train_2), np.array(x_train_3)
+		indic_start = max_seq_len * i
+		encode_res_1 = encode_sent(vocab, items[1], max_seq_len, indic_start, embedding_type)
+		encode_res_2 = encode_sent(vocab, items[0], max_seq_len, indic_start, embedding_type)
+		encode_res_3 = encode_sent(vocab, nega, max_seq_len, indic_start, embedding_type)
+		if embedding_type == "subword_embedding":
+			x_train_1 += encode_res_1[0]
+			x_train_2 += encode_res_2[0]
+			x_train_3 += encode_res_3[0]
+			indices_train_1 += encode_res_1[1]
+			indices_train_2 += encode_res_2[1]
+			indices_train_3 += encode_res_3[1]
+		else:
+			x_train_1.append(encode_res_1[0])
+			x_train_2.append(encode_res_2[0])
+			x_train_3.append(encode_res_3[0])
+	return np.array(x_train_1), np.array(x_train_2), np.array(x_train_3),\
+		np.array(indices_train_1), np.array(indices_train_2), np.array(indices_train_3)
 
-def semihard_sample(sess, model_obj, vocab, raw, batch_size, max_seq_len, avec_list, label_map, alist, macro_size, min_margin, max_margin, embedding_type="word_embedding"):
+def semihard_sample(sess, model_obj, vocab, raw, batch_size, max_seq_len, avec_list, label_map, alist, macro_size, min_margin, max_margin, embedding_type="word_embedding", max_wordlen=6):
 	macro_x_train_1 = []
 	macro_x_train_2 = []
+	macro_indices_train_1 = []
+	macro_indices_train_2 = []
+	raw_x_1_res = []
+	raw_x_2_res = []
 	raw_query2label = []
 	#准备Marco问句和正例
 	for i in range(0, macro_size):
 		items = raw[random.randint(0, len(raw) - 1)]
-		macro_x_train_1.append(encode_sent(vocab, items[1], max_seq_len, embedding_type))
-		macro_x_train_2.append(encode_sent(vocab, items[0], max_seq_len, embedding_type))
-		#pdb.set_trace()
+		indic_start = max_seq_len * i
+		encode_res_1 = encode_sent(vocab, items[1], max_seq_len, indic_start, embedding_type)
+		encode_res_2 = encode_sent(vocab, items[0], max_seq_len, indic_start, embedding_type)
 		raw_query2label.append(label_map[items[1]])
-	
+		if embedding_type == "subword_embedding":
+			macro_x_train_1 += encode_res_1[0]
+			macro_x_train_2 += encode_res_2[0]
+			macro_indices_train_1 += encode_res_1[1]
+			macro_indices_train_2 += encode_res_2[1]
+			raw_x_1_res.append((encode_res_1[0],encode_res_1[1], indic_start))
+			raw_x_2_res.append((encode_res_2[0],encode_res_2[1], indic_start))
+		else:
+			macro_x_train_1.append(encode_res_1[0])
+			macro_x_train_2.append(encode_res_2[0])
+		
 	ans_cnt = 0
 	max_ans_cnt = 500
 	macro_x_train_3 = []
+	macro_indices_train_3 = []
 	if len(avec_list) <= max_ans_cnt:
 		ans_inx_list = range(len(avec_list))
 	else:
 		ans_inx_list = random.sample(range(len(avec_list)), max_ans_cnt)
 
 	for inx in ans_inx_list:
-		macro_x_train_3.append(avec_list[inx])
+		if embedding_type == "subword_embedding":
+			macro_x_train_3 += avec_list[inx][0]
+			macro_indices_train_3 += change_indic_start(0, ans_cnt*max_seq_len, avec_list[inx][1])
+		else:
+			macro_x_train_3.append(avec_list[inx][0])
 		ans_cnt += 1
 	
 	feed_dict = {
@@ -225,11 +299,21 @@ def semihard_sample(sess, model_obj, vocab, raw, batch_size, max_seq_len, avec_l
 	  model_obj.input_x_3: macro_x_train_3,
 	  model_obj.dropout_keep_prob: 1.0
 	}
+	if embedding_type == "subword_embedding":
+		feed_dict[model_obj.indices_x_1] = macro_indices_train_1 
+		feed_dict[model_obj.indices_x_2] = macro_indices_train_2
+		feed_dict[model_obj.indices_x_3] = macro_indices_train_3
+		feed_dict[model_obj.subword_shape_1] = np.array([macro_size*max_seq_len,max_wordlen]) 
+		feed_dict[model_obj.subword_shape_2] = np.array([macro_size*max_seq_len,max_wordlen])
+		feed_dict[model_obj.subword_shape_3] =np.array([macro_size*max_seq_len,max_wordlen])
 	pos_sim, pair_sim = sess.run([model_obj.cos_12, model_obj.pair_sim_13], feed_dict)
 	
 	x_train_1 = []
 	x_train_2 = []
 	x_train_3 = []
+	indices_train_1 = []
+	indices_train_2 = []
+	indices_train_3 = []
 	rand_list = []
 	semi_cnt = 0
 	for inx in range(len(pos_sim)):
@@ -252,9 +336,17 @@ def semihard_sample(sess, model_obj, vocab, raw, batch_size, max_seq_len, avec_l
 			continue
 		semi_iny = ans_inx_list[semi_iny]
 		items = avec_list[semi_iny]
-		x_train_1.append(macro_x_train_1[inx])
-		x_train_2.append(macro_x_train_2[inx])
-		x_train_3.append(items)
+		if embedding_type == "subword_embedding":
+			x_train_1 += raw_x_1_res[inx][0]
+			x_train_2 += raw_x_2_res[inx][0]
+			x_train_3 += items[0]
+			indices_train_1 += change_indic_start(raw_x_1_res[inx][2],semi_cnt*max_seq_len,raw_x_1_res[inx][1]) 
+			indices_train_2 += change_indic_start(raw_x_2_res[inx][2],semi_cnt*max_seq_len,raw_x_2_res[inx][1])
+			indices_train_3 += change_indic_start(0,semi_cnt*max_seq_len,items[1])
+		else:
+			x_train_1.append(macro_x_train_1[inx])
+			x_train_2.append(macro_x_train_2[inx])
+			x_train_3.append(items[0])
 		semi_cnt += 1
 	print "Semi-hard negative samples",semi_cnt,"rand negative samples",batch_size-semi_cnt
 	rand_inx = 0
@@ -266,26 +358,46 @@ def semihard_sample(sess, model_obj, vocab, raw, batch_size, max_seq_len, avec_l
 			tmp_iny = random.randint(0, len(avec_list) - 1)
 			tmp_label = label_map[alist[tmp_iny]]
 		items = avec_list[tmp_iny]
-		x_train_1.append(macro_x_train_1[inx])
-		x_train_2.append(macro_x_train_2[inx])
-		x_train_3.append(items)
+		if embedding_type == "subword_embedding":
+			x_train_1 += raw_x_1_res[inx][0]
+			x_train_2 += raw_x_2_res[inx][0]
+			x_train_3 += items[0]
+			indices_train_1 += change_indic_start(raw_x_1_res[inx][2],semi_cnt*max_seq_len,raw_x_1_res[inx][1])
+			indices_train_2 += change_indic_start(raw_x_2_res[inx][2],semi_cnt*max_seq_len,raw_x_2_res[inx][1])
+			indices_train_3 += change_indic_start(0,semi_cnt*max_seq_len,items[1])
+		else:
+			x_train_1.append(macro_x_train_1[inx])
+			x_train_2.append(macro_x_train_2[inx])
+			x_train_3.append(items[0])
 		rand_inx += 1
 		semi_cnt += 1
-	return np.array(x_train_1), np.array(x_train_2), np.array(x_train_3)
+	return np.array(x_train_1), np.array(x_train_2), np.array(x_train_3), \
+		np.array(indices_train_1), np.array(indices_train_2), np.array(indices_train_3)
 
 def load_data_val(testList, vocab, index, batch, max_seq_len, embedding_type="word_embedding"):
 	x_train_1 = []
 	x_train_2 = []
+	indic_train_1 = []
+	indic_train_2 = []
 	tag_list = []
 	for i in range(0, batch):
 		true_index = index + i
 		if (true_index >= len(testList)):
 			true_index = len(testList) - 1
+		indic_start = max_seq_len * i
 		items = testList[true_index].split('\t')
-		x_train_1.append(encode_sent(vocab, items[2], max_seq_len, embedding_type))
-		x_train_2.append(encode_sent(vocab, items[1], max_seq_len, embedding_type))
 		tag_list.append(items[0])
-	return np.array(x_train_1), np.array(x_train_2), tag_list
+		encode_res_1 = encode_sent(vocab, items[2], max_seq_len, indic_start, embedding_type)
+		encode_res_2 = encode_sent(vocab, items[1], max_seq_len, indic_start, embedding_type)
+		if embedding_type == "subword_embedding":
+			x_train_1 += encode_res_1[0]
+			x_train_2 += encode_res_2[0]
+			indic_train_1 += encode_res_1[1]
+			indic_train_2 += encode_res_2[1]
+		else:
+			x_train_1.append(encode_res_1[0])
+			x_train_2.append(encode_res_2[0])
+	return np.array(x_train_1), np.array(x_train_2), np.array(indic_train_1), np.array(indic_train_2), tag_list
 
 def batch_iter(data, batch_size, num_epochs, shuffle=True):
 	data = np.array(data)
