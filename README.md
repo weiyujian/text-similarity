@@ -17,6 +17,11 @@ rand负采样的效果会差一些
 
 =================run=====================
 
+训练集和测试集的格式：标签\t问句
+
+进行分词处理：python insurance_qa_data_helpers.py
+
+训练：
 python train.py --model_verion=xxx
 
 model_verion:模型版本号
