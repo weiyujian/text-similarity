@@ -19,6 +19,8 @@ rand负采样的效果会差一些
 
 训练集和测试集的格式：标签\t问句
 
+数据集demo在：knn-classification/knn-classification/data/
+
 进行分词处理：python insurance_qa_data_helpers.py
 
 训练：
