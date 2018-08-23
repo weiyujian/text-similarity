@@ -50,7 +50,7 @@ class InsQACNN(object):
 			else:
 				self.embedded_chars_expanded_1 = tf.expand_dims(tf.nn.embedding_lookup(W, self.input_x_1), -1)
 				self.embedded_chars_expanded_2 = tf.expand_dims(tf.nn.embedding_lookup(W, self.input_x_2), -1)
-				self.embedded_chars_expanded_3 = tf.expand_dims(tf.nn.embedding_lookup(W, self.input_x_2), -1)
+				self.embedded_chars_expanded_3 = tf.expand_dims(tf.nn.embedding_lookup(W, self.input_x_3), -1)
 
 		pooled_outputs_1 = []
 		pooled_outputs_2 = []
